@@ -49,7 +49,8 @@ Just configure the config files, then run the below in the terminal (only tested
 python bun_extract.py --config config.json
 ```
 
-This outputs bun_matches.csv. Then run:
+This outputs bun_matches.csv. 
+Then run:
 
 ```bash
 python barcode_from_bun_csv.py --config barcode_config.json
