@@ -39,3 +39,20 @@ InsertDiversity scans Illumina FASTQ files to identify reads containing user-def
 conda install -c bioconda -c conda-forge biopython
 ```
 
+---
+
+## How to run it:
+
+Just configure the config files, then run the below in the terminal (only tested on Linux):
+
+```bash
+python bun_extract.py --config config.json
+```
+
+This outputs bun_matches.csv. Then run:
+
+```bash
+python barcode_from_bun_csv.py --config barcode_config.json
+```
+
+This outputs bun_matches_with_barcode.csv and barcode_counts.csv.
