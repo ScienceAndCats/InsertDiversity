@@ -1,0 +1,9 @@
+{
+  "fastq": "data/pUC57_S257_R2_001.fastq.gz",
+  "upstream": "ACCGATAAAGGACAAATT",
+  "downstream": "TGGGCGGGTAGCTCCACATGT",
+  "min_match": 10,
+  "out_csv": "bun_matches.csv",
+  "max_reads": null,
+  "progress_every": 200000
+}

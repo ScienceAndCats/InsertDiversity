@@ -1,0 +1,8 @@
+{
+  "in_csv": "bun_matches.csv",
+  "out_csv": "bun_matches_with_barcode.csv",
+  "out_barcode_report": "barcode_counts.csv",
+  "expected_barcode_len": 25,
+  "min_barcode_len": 1,
+  "include_empty_barcodes": true
+}
