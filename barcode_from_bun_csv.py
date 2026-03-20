@@ -31,6 +31,7 @@ Optional config fields:
   - expected_barcode_len (default 25)  # used only for an extra QC column in report
   - min_barcode_len (default 1)        # only barcodes >= this length are counted in report
   - include_empty_barcodes (default false)  # if true, count empty barcode strings too (not recommended)
+  - min_real_barcode_count (default 3) # only barcodes seen at least this many times are considered "real"
 
 Dependencies:
   - standard library only (csv, json)
@@ -74,6 +75,7 @@ def main():
     expected_len = int(cfg.get("expected_barcode_len", 25))
     min_barcode_len = int(cfg.get("min_barcode_len", 1))
     include_empty = bool(cfg.get("include_empty_barcodes", False))
+    min_real_barcode_count = int(cfg.get("min_real_barcode_count", 3))
 
     if not in_csv or not out_csv or not out_barcode_report:
         raise ValueError("Config must include: in_csv, out_csv, out_barcode_report")
@@ -90,7 +92,7 @@ def main():
 
     barcode_counts = Counter()
     total_rows = 0
-    rows_with_valid_barcode = 0
+    rows_with_extracted_barcode = 0
 
     with open(in_csv, "r", newline="") as f_in:
         reader = csv.DictReader(f_in)
@@ -123,7 +125,7 @@ def main():
                     barcode = oriented[up_end + 1 : dn_start]
                     barcode_len = str(len(barcode))
 
-                    # Decide whether to count it in the summary
+                    # Decide whether to include it in the summary report
                     if include_empty:
                         ok_to_count = (len(barcode) >= 0)
                     else:
@@ -131,7 +133,7 @@ def main():
 
                     if ok_to_count:
                         barcode_counts[barcode] += 1
-                        rows_with_valid_barcode += 1
+                        rows_with_extracted_barcode += 1
 
                 row["barcode"] = barcode
                 row["barcode_len"] = barcode_len
@@ -139,13 +141,22 @@ def main():
                 writer.writerow(row)
 
     # Write barcode report
-    # Percent is relative to rows_with_valid_barcode (i.e., reads where we successfully extracted a barcode)
+    # Percent is relative to rows_with_extracted_barcode.
     with open(out_barcode_report, "w", newline="") as f_rep:
-        rep_fields = ["barcode", "barcode_len", "count", "percent", "expected_barcode_len", "len_minus_expected"]
+        rep_fields = [
+            "barcode",
+            "barcode_len",
+            "count",
+            "percent",
+            "is_real_barcode",
+            "min_real_barcode_count",
+            "expected_barcode_len",
+            "len_minus_expected",
+        ]
         rep = csv.DictWriter(f_rep, fieldnames=rep_fields)
         rep.writeheader()
 
-        denom = rows_with_valid_barcode if rows_with_valid_barcode > 0 else 1
+        denom = rows_with_extracted_barcode if rows_with_extracted_barcode > 0 else 1
 
         for barcode, count in barcode_counts.most_common():
             blen = len(barcode)
@@ -154,16 +165,20 @@ def main():
                 "barcode_len": blen,
                 "count": count,
                 "percent": round(100.0 * count / denom, 6),
+                "is_real_barcode": "true" if count >= min_real_barcode_count else "false",
+                "min_real_barcode_count": min_real_barcode_count,
                 "expected_barcode_len": expected_len,
                 "len_minus_expected": blen - expected_len,
             })
 
     unique_barcodes = len(barcode_counts)
+    real_unique_barcodes = sum(1 for count in barcode_counts.values() if count >= min_real_barcode_count)
 
     print("Done.")
     print(f"Input rows (reads in CSV):                {total_rows:,}")
-    print(f"Rows with extracted barcodes (counted):   {rows_with_valid_barcode:,}")
-    print(f"Unique barcodes (in counted set):         {unique_barcodes:,}")
+    print(f"Rows with extracted barcodes:             {rows_with_extracted_barcode:,}")
+    print(f"Unique barcodes (all extracted):          {unique_barcodes:,}")
+    print(f"Real unique barcodes (count>={min_real_barcode_count}): {real_unique_barcodes:,}")
     print(f"Augmented CSV written to:                 {out_csv}")
     print(f"Barcode report written to:                {out_barcode_report}")
 

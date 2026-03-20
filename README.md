@@ -26,9 +26,11 @@ InsertDiversity scans Illumina FASTQ files to identify reads containing user-def
 * Adds barcode + barcode length to CSV
 * Produces a summary report with:
 
-  * Unique barcode count
+  * Unique barcode count across all extracted barcodes
+  * Real unique barcode count using a configurable minimum count threshold (default 3)
   * Frequency per barcode
   * Percent abundance
+  * A per-barcode flag showing whether it meets the real-barcode threshold
   * Length deviation from expected
 
 ---
