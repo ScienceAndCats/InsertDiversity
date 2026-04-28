@@ -1,8 +1,11 @@
 {
-  "in_csv": "bun_matches.csv",
-  "out_csv": "bun_matches_with_barcode.csv",
-  "out_barcode_report": "barcode_counts.csv",
+  "in_csv_dir": "outputs/bun_matches",
+  "in_csv_glob": "*_bun_matches.csv",
+  "out_csv_dir": "outputs/barcodes/augmented",
+  "out_barcode_report_dir": "outputs/barcodes/per_file_reports",
+  "out_multi_file_barcode_report": "outputs/barcodes/barcode_multi_file_membership.csv",
   "expected_barcode_len": 24,
   "min_barcode_len": 1,
-  "include_empty_barcodes": true
+  "include_empty_barcodes": true,
+  "min_real_barcode_count": 3
 }
