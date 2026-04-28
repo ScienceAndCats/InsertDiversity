@@ -51,7 +51,7 @@ Just configure the config files, then run the below in the terminal (only tested
 python bun_extract.py --config config.json
 ```
 
-This outputs bun_matches.csv. 
+In the default `config.json`, `bun_extract.py` scans a folder and writes one `{name}_bun_matches.csv` per primary input file into `outputs/bun_matches/`, plus a cross-file barcode membership CSV.
 
 Then run:
 
@@ -59,4 +59,4 @@ Then run:
 python barcode_from_bun_csv.py --config barcode_config.json
 ```
 
-This outputs bun_matches_with_barcode.csv and barcode_counts.csv.
+In the default `barcode_config.json`, this processes every `*_bun_matches.csv` in that folder and writes per-file augmented CSVs, per-file barcode count reports, and a multi-file barcode membership CSV under `outputs/barcodes/`.

@@ -1,9 +1,10 @@
 {
-  "fastq": "data/s17-bc/S17_BC_S104_R1_001.fastq.gz",
+  "input_dir": "data/s17-bc",
   "upstream": "TCATAGTGAGCTCAGCG",
   "downstream": "GTGCCCCACAAGAGGTT",
   "min_match": 10,
-  "out_csv": "bun_matches.csv",
+  "out_dir": "outputs/bun_matches",
+  "cross_file_barcode_csv": "outputs/bun_matches/barcode_file_membership.csv",
   "max_reads": null,
   "progress_every": 200000
 }
