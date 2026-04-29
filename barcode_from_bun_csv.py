@@ -15,6 +15,7 @@ In folder mode, also reports:
 """
 
 import argparse
+import concurrent.futures
 import csv
 import json
 from collections import Counter, defaultdict
@@ -212,27 +213,35 @@ def main():
     barcode_presence = defaultdict(set)
     per_file_unique_counts: Dict[str, int] = {}
 
-    for item in output_plan:
-        stats = process_one_csv(
-            in_csv=item["in"],
-            out_csv=item["out_csv"],
-            out_barcode_report=item["out_report"],
-            expected_len=expected_len,
-            min_barcode_len=min_barcode_len,
-            include_empty=include_empty,
-            min_real_barcode_count=min_real_barcode_count,
-        )
+    max_workers = int(cfg.get("max_workers", len(output_plan)))
+    with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+        future_to_item = {
+            executor.submit(
+                process_one_csv,
+                in_csv=item["in"],
+                out_csv=item["out_csv"],
+                out_barcode_report=item["out_report"],
+                expected_len=expected_len,
+                min_barcode_len=min_barcode_len,
+                include_empty=include_empty,
+                min_real_barcode_count=min_real_barcode_count,
+            ): item
+            for item in output_plan
+        }
 
-        print(f"Done: {item['in']}")
-        print(f"  Input rows (reads in CSV):                {stats['total_rows']:,}")
-        print(f"  Rows with extracted barcodes:             {stats['rows_with_extracted_barcode']:,}")
-        print(f"  Unique barcodes (all extracted):          {stats['unique_barcodes']:,}")
-        print(f"  Real unique barcodes (count>={min_real_barcode_count}): {stats['real_unique_barcodes']:,}")
-        print(f"  Augmented CSV written to:                 {item['out_csv']}")
-        print(f"  Barcode report written to:                {item['out_report']}")
+        for future in concurrent.futures.as_completed(future_to_item):
+            item = future_to_item[future]
+            stats = future.result()
+            print(f"Done: {item['in']}")
+            print(f"  Input rows (reads in CSV):                {stats['total_rows']:,}")
+            print(f"  Rows with extracted barcodes:             {stats['rows_with_extracted_barcode']:,}")
+            print(f"  Unique barcodes (all extracted):          {stats['unique_barcodes']:,}")
+            print(f"  Real unique barcodes (count>={min_real_barcode_count}): {stats['real_unique_barcodes']:,}")
+            print(f"  Augmented CSV written to:                 {item['out_csv']}")
+            print(f"  Barcode report written to:                {item['out_report']}")
 
-        for bc in stats["barcode_counts"].keys():
-            barcode_presence[bc].add(item["label"])
+            for bc in stats["barcode_counts"].keys():
+                barcode_presence[bc].add(item["label"])
 
     if len(output_plan) > 1:
         out_multi.parent.mkdir(parents=True, exist_ok=True)
