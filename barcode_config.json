@@ -4,6 +4,7 @@
   "out_csv_dir": "outputs/barcodes/augmented",
   "out_barcode_report_dir": "outputs/barcodes/per_file_reports",
   "out_multi_file_barcode_report": "outputs/barcodes/barcode_multi_file_membership.csv",
+  "out_file_summary_report": "outputs/barcodes/barcode_file_summary.csv",
   "expected_barcode_len": 24,
   "min_barcode_len": 1,
   "include_empty_barcodes": true,
