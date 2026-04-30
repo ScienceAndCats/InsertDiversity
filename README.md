@@ -60,3 +60,12 @@ python barcode_from_bun_csv.py --config barcode_config.json
 ```
 
 In the default `barcode_config.json`, this processes every `*_bun_matches.csv` in that folder and writes per-file augmented CSVs, per-file barcode count reports, and a multi-file barcode membership CSV under `outputs/barcodes/`.
+It also writes a per-file summary CSV (`outputs/barcodes/barcode_file_summary.csv`) containing file-level metrics such as:
+
+* total reads in each input CSV
+* reads with extracted barcodes
+* total barcode observations
+* unique and real-unique barcode counts
+* counts of barcodes unique to that file vs shared across files
+* min/max barcode abundance and mean count per unique barcode
+* percent of reads with barcodes and percent unique/shared barcodes

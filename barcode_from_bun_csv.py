@@ -15,6 +15,7 @@ In folder mode, also reports:
 """
 
 import argparse
+import concurrent.futures
 import csv
 import json
 from collections import Counter, defaultdict
@@ -159,6 +160,9 @@ def process_one_csv(
         "barcode_counts": barcode_counts,
         "unique_barcodes": len(barcode_counts),
         "real_unique_barcodes": sum(1 for c in barcode_counts.values() if c >= min_real_barcode_count),
+        "total_barcode_observations": sum(barcode_counts.values()),
+        "max_barcode_count": max(barcode_counts.values()) if barcode_counts else 0,
+        "min_barcode_count": min(barcode_counts.values()) if barcode_counts else 0,
     }
 
 
@@ -184,6 +188,7 @@ def main():
     out_csv_dir = Path(cfg.get("out_csv_dir", "."))
     out_report_dir = Path(cfg.get("out_barcode_report_dir", "."))
     out_multi = Path(cfg.get("out_multi_file_barcode_report", "barcode_multi_file_membership.csv"))
+    out_file_summary = Path(cfg.get("out_file_summary_report", "barcode_file_summary.csv"))
 
     if len(input_csvs) == 1:
         if not out_csv or not out_barcode_report:
@@ -211,28 +216,38 @@ def main():
 
     barcode_presence = defaultdict(set)
     per_file_unique_counts: Dict[str, int] = {}
+    per_file_stats: Dict[str, dict] = {}
 
-    for item in output_plan:
-        stats = process_one_csv(
-            in_csv=item["in"],
-            out_csv=item["out_csv"],
-            out_barcode_report=item["out_report"],
-            expected_len=expected_len,
-            min_barcode_len=min_barcode_len,
-            include_empty=include_empty,
-            min_real_barcode_count=min_real_barcode_count,
-        )
+    max_workers = int(cfg.get("max_workers", len(output_plan)))
+    with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+        future_to_item = {
+            executor.submit(
+                process_one_csv,
+                in_csv=item["in"],
+                out_csv=item["out_csv"],
+                out_barcode_report=item["out_report"],
+                expected_len=expected_len,
+                min_barcode_len=min_barcode_len,
+                include_empty=include_empty,
+                min_real_barcode_count=min_real_barcode_count,
+            ): item
+            for item in output_plan
+        }
 
-        print(f"Done: {item['in']}")
-        print(f"  Input rows (reads in CSV):                {stats['total_rows']:,}")
-        print(f"  Rows with extracted barcodes:             {stats['rows_with_extracted_barcode']:,}")
-        print(f"  Unique barcodes (all extracted):          {stats['unique_barcodes']:,}")
-        print(f"  Real unique barcodes (count>={min_real_barcode_count}): {stats['real_unique_barcodes']:,}")
-        print(f"  Augmented CSV written to:                 {item['out_csv']}")
-        print(f"  Barcode report written to:                {item['out_report']}")
+        for future in concurrent.futures.as_completed(future_to_item):
+            item = future_to_item[future]
+            stats = future.result()
+            print(f"Done: {item['in']}")
+            print(f"  Input rows (reads in CSV):                {stats['total_rows']:,}")
+            print(f"  Rows with extracted barcodes:             {stats['rows_with_extracted_barcode']:,}")
+            print(f"  Unique barcodes (all extracted):          {stats['unique_barcodes']:,}")
+            print(f"  Real unique barcodes (count>={min_real_barcode_count}): {stats['real_unique_barcodes']:,}")
+            print(f"  Augmented CSV written to:                 {item['out_csv']}")
+            print(f"  Barcode report written to:                {item['out_report']}")
 
-        for bc in stats["barcode_counts"].keys():
-            barcode_presence[bc].add(item["label"])
+            for bc in stats["barcode_counts"].keys():
+                barcode_presence[bc].add(item["label"])
+            per_file_stats[item["label"]] = stats
 
     if len(output_plan) > 1:
         out_multi.parent.mkdir(parents=True, exist_ok=True)
@@ -264,6 +279,58 @@ def main():
         print(f"Barcodes unique to single files:            {unique_total:,}")
         for label in sorted(per_file_unique_counts):
             print(f"  Unique to {label}: {per_file_unique_counts[label]:,}")
+
+    out_file_summary.parent.mkdir(parents=True, exist_ok=True)
+    with open(out_file_summary, "w", newline="") as f_summary:
+        fields = [
+            "file_label",
+            "input_csv",
+            "total_reads_in_csv",
+            "reads_with_barcodes",
+            "barcode_observations_total",
+            "unique_barcodes",
+            "real_unique_barcodes",
+            "barcodes_unique_to_this_file",
+            "barcodes_shared_with_other_files",
+            "max_barcode_count",
+            "min_barcode_count",
+            "mean_count_per_unique_barcode",
+            "percent_reads_with_barcodes",
+            "percent_barcodes_unique_to_file",
+            "percent_barcodes_shared",
+            "min_real_barcode_count",
+        ]
+        writer = csv.DictWriter(f_summary, fieldnames=fields)
+        writer.writeheader()
+        for item in sorted(output_plan, key=lambda x: x["label"]):
+            label = item["label"]
+            stats = per_file_stats[label]
+            bc_counts = stats["barcode_counts"]
+            unique_in_file = sum(1 for bc in bc_counts if len(barcode_presence[bc]) == 1)
+            shared_in_file = sum(1 for bc in bc_counts if len(barcode_presence[bc]) > 1)
+            per_file_unique_counts[label] = unique_in_file
+            total_unique = stats["unique_barcodes"] or 1
+            writer.writerow(
+                {
+                    "file_label": label,
+                    "input_csv": item["in"],
+                    "total_reads_in_csv": stats["total_rows"],
+                    "reads_with_barcodes": stats["rows_with_extracted_barcode"],
+                    "barcode_observations_total": stats["total_barcode_observations"],
+                    "unique_barcodes": stats["unique_barcodes"],
+                    "real_unique_barcodes": stats["real_unique_barcodes"],
+                    "barcodes_unique_to_this_file": unique_in_file,
+                    "barcodes_shared_with_other_files": shared_in_file,
+                    "max_barcode_count": stats["max_barcode_count"],
+                    "min_barcode_count": stats["min_barcode_count"],
+                    "mean_count_per_unique_barcode": round(stats["total_barcode_observations"] / total_unique, 6),
+                    "percent_reads_with_barcodes": round(100.0 * stats["rows_with_extracted_barcode"] / (stats["total_rows"] or 1), 6),
+                    "percent_barcodes_unique_to_file": round(100.0 * unique_in_file / total_unique, 6),
+                    "percent_barcodes_shared": round(100.0 * shared_in_file / total_unique, 6),
+                    "min_real_barcode_count": min_real_barcode_count,
+                }
+            )
+    print(f"Per-file summary report:                    {out_file_summary}")
 
 
 if __name__ == "__main__":

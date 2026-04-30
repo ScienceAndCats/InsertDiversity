@@ -15,6 +15,7 @@ Features:
 """
 
 import argparse
+import concurrent.futures
 import csv
 import gzip
 import json
@@ -198,6 +199,90 @@ def verify_barcode_with_r2(barcode: str, r2_seq: str) -> Tuple[bool, str]:
     return False, ""
 
 
+def process_one_input_file(
+    in_path: Path,
+    upstream: str,
+    downstream: str,
+    min_match: int,
+    max_reads,
+    progress_every: int,
+    out_dir: Path,
+    r2_path: Optional[Path],
+):
+    file_label = strip_seq_extensions(in_path.name)
+    out_path = out_dir / f"{file_label}_bun_matches.csv"
+    fmt = detect_seqio_format(in_path)
+    r2_lookup = load_r2_lookup(r2_path) if r2_path else {}
+    local_barcodes = set()
+
+    total = 0
+    matched = 0
+    with open_text_maybe_gzip(in_path) as in_f, open(out_path, "w", newline="") as out_f:
+        reader = SeqIO.parse(in_f, fmt)
+        w = csv.DictWriter(
+            out_f,
+            fieldnames=[
+                "source_file", "read_id", "orientation", "match_type", "raw_read_seq", "oriented_read_seq",
+                "upstream_start", "upstream_end", "upstream_match_len", "upstream_matched_seq",
+                "downstream_start", "downstream_end", "downstream_match_len", "downstream_matched_seq",
+                "after_upstream", "before_downstream", "barcode", "barcode_len", "r2_barcode_verified",
+                "r2_verified_barcode_seq", "r2_partner_file",
+            ],
+        )
+        w.writeheader()
+        for rec in reader:
+            total += 1
+            if max_reads is not None and total > int(max_reads):
+                break
+            raw_seq = normalize_seq(str(rec.seq))
+            if not raw_seq:
+                continue
+            orientation, oriented, up_hit, dn_hit = choose_best_orientation(raw_seq, upstream, downstream, min_match)
+            has_up = up_hit is not None
+            has_dn = dn_hit is not None
+            if not (has_up or has_dn):
+                continue
+            matched += 1
+            if has_up:
+                up_start, up_end, up_sub = up_hit
+                up_len = up_end - up_start + 1
+                after_up = oriented[up_end + 1 :] if up_end + 1 <= len(oriented) else ""
+            else:
+                up_start = up_end = up_len = ""; up_sub = ""; after_up = ""
+            if has_dn:
+                dn_start, dn_end, dn_sub = dn_hit
+                dn_len = dn_end - dn_start + 1
+                before_dn = oriented[:dn_start] if dn_start >= 0 else ""
+            else:
+                dn_start = dn_end = dn_len = ""; dn_sub = ""; before_dn = ""
+            match_type = "both" if (has_up and has_dn) else ("upstream" if has_up else "downstream")
+            barcode = ""; barcode_len = ""; r2_verified = ""; r2_verified_seq = ""
+            if has_up and has_dn and up_end < dn_start:
+                barcode = oriented[up_end + 1 : dn_start]
+                barcode_len = len(barcode)
+                if r2_lookup:
+                    r2_seq = r2_lookup.get(canonical_read_id(rec.id), "")
+                    ok, verified_seq = verify_barcode_with_r2(barcode, r2_seq)
+                    r2_verified = "true" if ok else "false"
+                    r2_verified_seq = verified_seq
+                    if ok:
+                        local_barcodes.add(barcode)
+                else:
+                    local_barcodes.add(barcode)
+            w.writerow({
+                "source_file": file_label, "read_id": rec.id, "orientation": orientation, "match_type": match_type,
+                "raw_read_seq": raw_seq, "oriented_read_seq": oriented, "upstream_start": up_start, "upstream_end": up_end,
+                "upstream_match_len": up_len, "upstream_matched_seq": up_sub, "downstream_start": dn_start,
+                "downstream_end": dn_end, "downstream_match_len": dn_len, "downstream_matched_seq": dn_sub,
+                "after_upstream": after_up, "before_downstream": before_dn, "barcode": barcode, "barcode_len": barcode_len,
+                "r2_barcode_verified": r2_verified, "r2_verified_barcode_seq": r2_verified_seq,
+                "r2_partner_file": r2_path.name if r2_path else "",
+            })
+            if progress_every and total % progress_every == 0:
+                print(f"[{file_label}] processed={total:,} matched={matched:,}", flush=True)
+    return {"in_path": in_path, "out_path": out_path, "r2_path": r2_path, "total": total, "matched": matched, "barcodes": local_barcodes, "file_label": file_label}
+
+
 def main():
     ap = argparse.ArgumentParser(description="Extract flanking sequence relative to bun matches across one file or a folder.")
     ap.add_argument("--config", required=True, help="Path to JSON config file")
@@ -246,142 +331,31 @@ def main():
 
     barcode_to_files = defaultdict(set)
 
-    for in_path in primary_files:
-        file_label = strip_seq_extensions(in_path.name)
-        out_path = out_dir / f"{file_label}_bun_matches.csv"
-        fmt = detect_seqio_format(in_path)
-        r2_path = pair_map.get(in_path)
-        r2_lookup = load_r2_lookup(r2_path) if r2_path else {}
-
-        total = 0
-        matched = 0
-
-        with open_text_maybe_gzip(in_path) as in_f, open(out_path, "w", newline="") as out_f:
-            reader = SeqIO.parse(in_f, fmt)
-            w = csv.DictWriter(
-                out_f,
-                fieldnames=[
-                    "source_file",
-                    "read_id",
-                    "orientation",
-                    "match_type",
-                    "raw_read_seq",
-                    "oriented_read_seq",
-                    "upstream_start",
-                    "upstream_end",
-                    "upstream_match_len",
-                    "upstream_matched_seq",
-                    "downstream_start",
-                    "downstream_end",
-                    "downstream_match_len",
-                    "downstream_matched_seq",
-                    "after_upstream",
-                    "before_downstream",
-                    "barcode",
-                    "barcode_len",
-                    "r2_barcode_verified",
-                    "r2_verified_barcode_seq",
-                    "r2_partner_file",
-                ],
+    max_workers = int(cfg.get("max_workers", len(primary_files)))
+    with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+        futures = [
+            executor.submit(
+                process_one_input_file,
+                in_path=f,
+                upstream=upstream,
+                downstream=downstream,
+                min_match=min_match,
+                max_reads=max_reads,
+                progress_every=progress_every,
+                out_dir=out_dir,
+                r2_path=pair_map.get(f),
             )
-            w.writeheader()
-
-            for rec in reader:
-                total += 1
-                if max_reads is not None and total > int(max_reads):
-                    break
-
-                raw_seq = normalize_seq(str(rec.seq))
-                if not raw_seq:
-                    continue
-
-                orientation, oriented, up_hit, dn_hit = choose_best_orientation(raw_seq, upstream, downstream, min_match)
-                has_up = up_hit is not None
-                has_dn = dn_hit is not None
-
-                if not (has_up or has_dn):
-                    continue
-
-                matched += 1
-
-                if has_up:
-                    up_start, up_end, up_sub = up_hit
-                    up_len = up_end - up_start + 1
-                    after_up = oriented[up_end + 1 :] if up_end + 1 <= len(oriented) else ""
-                else:
-                    up_start = up_end = up_len = ""
-                    up_sub = ""
-                    after_up = ""
-
-                if has_dn:
-                    dn_start, dn_end, dn_sub = dn_hit
-                    dn_len = dn_end - dn_start + 1
-                    before_dn = oriented[:dn_start] if dn_start >= 0 else ""
-                else:
-                    dn_start = dn_end = dn_len = ""
-                    dn_sub = ""
-                    before_dn = ""
-
-                if has_up and has_dn:
-                    match_type = "both"
-                elif has_up:
-                    match_type = "upstream"
-                else:
-                    match_type = "downstream"
-
-                barcode = ""
-                barcode_len = ""
-                r2_verified = ""
-                r2_verified_seq = ""
-
-                if has_up and has_dn and up_end < dn_start:
-                    barcode = oriented[up_end + 1 : dn_start]
-                    barcode_len = len(barcode)
-
-                    if r2_lookup:
-                        r2_seq = r2_lookup.get(canonical_read_id(rec.id), "")
-                        ok, verified_seq = verify_barcode_with_r2(barcode, r2_seq)
-                        r2_verified = "true" if ok else "false"
-                        r2_verified_seq = verified_seq
-                        if ok:
-                            barcode_to_files[barcode].add(file_label)
-                    else:
-                        barcode_to_files[barcode].add(file_label)
-
-                w.writerow(
-                    {
-                        "source_file": file_label,
-                        "read_id": rec.id,
-                        "orientation": orientation,
-                        "match_type": match_type,
-                        "raw_read_seq": raw_seq,
-                        "oriented_read_seq": oriented,
-                        "upstream_start": up_start,
-                        "upstream_end": up_end,
-                        "upstream_match_len": up_len,
-                        "upstream_matched_seq": up_sub,
-                        "downstream_start": dn_start,
-                        "downstream_end": dn_end,
-                        "downstream_match_len": dn_len,
-                        "downstream_matched_seq": dn_sub,
-                        "after_upstream": after_up,
-                        "before_downstream": before_dn,
-                        "barcode": barcode,
-                        "barcode_len": barcode_len,
-                        "r2_barcode_verified": r2_verified,
-                        "r2_verified_barcode_seq": r2_verified_seq,
-                        "r2_partner_file": r2_path.name if r2_path else "",
-                    }
-                )
-
-                if progress_every and total % progress_every == 0:
-                    print(f"[{file_label}] processed={total:,} matched={matched:,}", flush=True)
-
-        paired_note = f" (R2 verification: {r2_path.name})" if r2_path else ""
-        print(f"Done {in_path.name}{paired_note}")
-        print(f"  Reads processed: {total:,}")
-        print(f"  Reads matched:   {matched:,}")
-        print(f"  Output CSV:      {out_path}")
+            for f in primary_files
+        ]
+        for future in concurrent.futures.as_completed(futures):
+            result = future.result()
+            for barcode in result["barcodes"]:
+                barcode_to_files[barcode].add(result["file_label"])
+            paired_note = f" (R2 verification: {result['r2_path'].name})" if result["r2_path"] else ""
+            print(f"Done {result['in_path'].name}{paired_note}")
+            print(f"  Reads processed: {result['total']:,}")
+            print(f"  Reads matched:   {result['matched']:,}")
+            print(f"  Output CSV:      {result['out_path']}")
 
     with open(cross_file_csv, "w", newline="") as out_cross:
         w = csv.DictWriter(
