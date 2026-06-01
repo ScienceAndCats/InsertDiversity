@@ -10,10 +10,10 @@
       "enabled": true,
       "script": "bun_extract.py",
       "config": {
-        "input_dir": "data/s17-bc",
+        "input_dir": "/storage/home/hcoda1/2/hwilms3/r-mwhiteley3-0/BZDG3S_fastq",
         "upstream": "TCATAGTGAGCTCAGCG",
         "downstream": "GTGCCCCACAAGAGGTT",
-        "min_match": 10,
+        "min_match": 11,
         "out_dir": "outputs/bun_matches",
         "cross_file_barcode_csv": "outputs/bun_matches/barcode_file_membership.csv",
         "max_reads": null,
@@ -32,8 +32,15 @@
         "out_file_summary_report": "outputs/barcodes/barcode_file_summary.csv",
         "expected_barcode_len": 24,
         "min_barcode_len": 1,
+        "max_barcode_len": 100,
         "include_empty_barcodes": true,
-        "min_real_barcode_count": 3
+        "min_real_barcode_count": 3,
+        "collapse_barcodes": true,
+        "starcode_path": "starcode",
+        "starcode_distance": 3,
+        "starcode_cluster_ratio": 3,
+        "starcode_clustering_algorithm": "message_passing",
+        "starcode_threads": 10
       }
     },
     "ordered_barcode_sample_analysis": {

@@ -19,16 +19,28 @@ import concurrent.futures
 import csv
 import gzip
 import re
+import sys
 from collections import defaultdict
 from pathlib import Path
 from typing import Dict, Iterable, Optional, Tuple
 
-from Bio import SeqIO
-
-from config_helpers import available_threads, configured_threads, load_script_config
+from config_helpers import available_threads, configured_threads, load_script_config, run_cli
 
 
 READ_EXTENSIONS = (".fasta", ".fa", ".fna", ".fastq", ".fq")
+SeqIO = None
+
+
+def ensure_biopython() -> None:
+    global SeqIO
+    if SeqIO is not None:
+        return
+    try:
+        from Bio import SeqIO as bio_seqio
+    except ModuleNotFoundError as exc:
+        print(f"ERROR: Missing Python dependency: {exc.name}", file=sys.stderr)
+        raise SystemExit(1) from exc
+    SeqIO = bio_seqio
 
 
 def revcomp(seq: str) -> str:
@@ -37,6 +49,8 @@ def revcomp(seq: str) -> str:
 
 
 def open_text_maybe_gzip(path: Path):
+    if not path.is_file():
+        raise FileNotFoundError(f"Input sequence file not found: {path}")
     if str(path).lower().endswith(".gz"):
         return gzip.open(path, "rt")
     return open(path, "rt")
@@ -132,7 +146,7 @@ def collect_input_files(cfg: dict) -> Iterable[Path]:
     if not single:
         raise ValueError("Config must include one of: fastq, input_file, input_dir")
     single_path = Path(single)
-    if not single_path.exists():
+    if not single_path.is_file():
         raise FileNotFoundError(f"Input file not found: {single_path}")
     return [single_path]
 
@@ -181,6 +195,7 @@ def choose_best_orientation(raw_seq: str, upstream: str, downstream: str, min_ma
 
 
 def load_r2_lookup(r2_path: Path) -> Dict[str, str]:
+    ensure_biopython()
     lookup: Dict[str, str] = {}
     fmt = detect_seqio_format(r2_path)
     with open_text_maybe_gzip(r2_path) as r2_handle:
@@ -210,6 +225,7 @@ def process_one_input_file(
     out_dir: Path,
     r2_path: Optional[Path],
 ):
+    ensure_biopython()
     file_label = strip_seq_extensions(in_path.name)
     out_path = out_dir / f"{file_label}_bun_matches.csv"
     fmt = detect_seqio_format(in_path)
@@ -290,7 +306,7 @@ def main():
     args = ap.parse_args()
 
     cfg_path = Path(args.config)
-    if not cfg_path.exists():
+    if not cfg_path.is_file():
         raise FileNotFoundError(f"Config not found: {cfg_path}")
     cfg = load_script_config(cfg_path, "bun_extract")
 
@@ -314,6 +330,7 @@ def main():
         )
 
     input_files = [Path(p) for p in collect_input_files(cfg)]
+    ensure_biopython()
     out_dir.mkdir(parents=True, exist_ok=True)
     cross_file_csv.parent.mkdir(parents=True, exist_ok=True)
 
@@ -380,4 +397,4 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    run_cli(main)

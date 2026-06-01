@@ -2,3 +2,6 @@ data/
 *.fastq.gz
 data/
 *.fastq.gz
+outputs
+ordered_barcode_analysis_outputs
+__pycache__

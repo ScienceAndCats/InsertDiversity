@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Callable, Dict, Optional
 
 
 def available_threads() -> int:
@@ -68,3 +69,12 @@ def load_script_config(config_path: Path, script_name: str) -> Dict[str, Any]:
         if shared_key in cfg and shared_key not in step_cfg:
             step_cfg[shared_key] = cfg[shared_key]
     return step_cfg
+
+
+def run_cli(main_func: Callable[[], None]) -> None:
+    """Run a script entry point and report configuration/input errors clearly."""
+    try:
+        main_func()
+    except Exception as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        raise SystemExit(1) from exc

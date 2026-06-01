@@ -27,17 +27,38 @@ import argparse
 import concurrent.futures
 import math
 import re
+import sys
 from pathlib import Path
 from typing import Dict, List, Tuple
 
-import matplotlib.pyplot as plt
-import numpy as np
-import pandas as pd
+from config_helpers import available_threads, configured_threads, load_script_config, run_cli
 
-from config_helpers import available_threads, configured_threads, load_script_config
+
+plt = None
+np = None
+pd = None
+
+
+def ensure_analysis_dependencies() -> None:
+    global plt, np, pd
+    if plt is not None and np is not None and pd is not None:
+        return
+    try:
+        import matplotlib.pyplot as matplotlib_pyplot
+        import numpy as numpy_module
+        import pandas as pandas_module
+    except ModuleNotFoundError as exc:
+        print(f"ERROR: Missing Python dependency: {exc.name}", file=sys.stderr)
+        raise SystemExit(1) from exc
+    plt = matplotlib_pyplot
+    np = numpy_module
+    pd = pandas_module
 
 
 def load_config(config_path: Path) -> dict:
+    if not config_path.is_file():
+        raise FileNotFoundError(f"Config not found: {config_path}")
+
     cfg = load_script_config(config_path, "ordered_barcode_sample_analysis")
 
     defaults = {
@@ -118,16 +139,17 @@ def sample_name_from_file(path: Path, remove_regex: str) -> str:
 def discover_files(cfg: dict) -> List[Path]:
     if cfg.get("explicit_files"):
         files = [Path(p).expanduser().resolve() for p in cfg["explicit_files"]]
+        missing = [str(p) for p in files if not p.is_file()]
+        if missing:
+            raise FileNotFoundError("These input CSV files do not exist:\n" + "\n".join(missing))
     else:
         input_dir = Path(cfg["input_dir"]).expanduser().resolve()
-        files = sorted(input_dir.glob(cfg["csv_pattern"]))
+        if not input_dir.is_dir():
+            raise FileNotFoundError(f"input_dir not found or not a directory: {input_dir}")
+        files = sorted(p for p in input_dir.glob(cfg["csv_pattern"]) if p.is_file())
 
     if len(files) < 2:
-        raise SystemExit(f"Found {len(files)} file(s). Need at least 2 CSV files.")
-
-    missing = [str(p) for p in files if not p.exists()]
-    if missing:
-        raise FileNotFoundError("These input files do not exist:\n" + "\n".join(missing))
+        raise ValueError(f"Found {len(files)} CSV file(s). Need at least 2 CSV files.")
 
     return files
 
@@ -815,11 +837,11 @@ def main():
     args = parser.parse_args()
 
     cfg = load_config(Path(args.config))
+    files = discover_files(cfg)
+    ensure_analysis_dependencies()
 
     output_dir = Path(cfg["output_dir"]).expanduser().resolve()
     output_dir.mkdir(parents=True, exist_ok=True)
-
-    files = discover_files(cfg)
 
     (
         sample_order,
@@ -928,4 +950,4 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    run_cli(main)

@@ -10,6 +10,8 @@ import sys
 from pathlib import Path
 from typing import Any, Dict, List
 
+from config_helpers import run_cli
+
 
 COMMANDS = {
     "bun_extract": [sys.executable, "bun_extract.py", "--config"],
@@ -22,6 +24,9 @@ COMMANDS = {
 
 
 def load_pipeline_config(path: Path) -> Dict[str, Any]:
+    if not path.is_file():
+        raise FileNotFoundError(f"Pipeline config not found: {path}")
+
     with path.open("r") as handle:
         cfg = json.load(handle)
 
@@ -53,6 +58,11 @@ def command_for(name: str, step: Dict[str, Any], config_path: Path) -> List[str]
             raise ValueError(
                 f"Script '{name}' needs either a known command, a command array, or a script path."
             )
+        script_path = Path(script)
+        if not script_path.is_absolute():
+            script_path = Path(__file__).resolve().parent / script_path
+        if not script_path.is_file():
+            raise FileNotFoundError(f"Script file for '{name}' not found: {script_path}")
         command = [sys.executable, script, "--config"]
 
     if not isinstance(command, list) or not all(isinstance(x, str) for x in command):
@@ -78,6 +88,8 @@ def main() -> None:
     args = parser.parse_args()
 
     pipeline_config_path = Path(args.config)
+    if not pipeline_config_path.is_absolute():
+        pipeline_config_path = pipeline_config_path.resolve()
     cfg = load_pipeline_config(pipeline_config_path)
     enabled_names = selected_script_names(cfg)
 
@@ -101,10 +113,19 @@ def main() -> None:
     for name, command in planned_commands:
         print(f"\n=== Running {name} ===")
         print("Command:", " ".join(command))
-        subprocess.run(command, cwd=repo_root, check=True)
+        try:
+            subprocess.run(command, cwd=repo_root, check=True)
+        except FileNotFoundError as exc:
+            raise FileNotFoundError(
+                f"Could not start pipeline step '{name}'. Missing executable or file: {exc.filename}"
+            ) from exc
+        except subprocess.CalledProcessError as exc:
+            raise RuntimeError(
+                f"Pipeline step '{name}' failed with exit code {exc.returncode}: {' '.join(command)}"
+            ) from exc
 
     print("\nPipeline complete.")
 
 
 if __name__ == "__main__":
-    main()
+    run_cli(main)

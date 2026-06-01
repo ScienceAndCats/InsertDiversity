@@ -30,11 +30,13 @@ InsertDiversity scans Illumina FASTQ files to identify reads containing user-def
 * Produces per-file barcode count reports with:
 
   * Unique barcode count across all extracted barcodes.
-  * Real unique barcode count using a configurable minimum count threshold (default 3).
+  * Optional abundance-aware collapsing of likely sequencing-error barcodes into nearby, more abundant parent barcodes using Starcode.
+  * Real unique barcode count from Starcode canonical clusters when collapsing is enabled.
   * Frequency per barcode.
   * Percent abundance.
-  * A per-barcode flag showing whether it meets the real-barcode threshold.
+  * A per-barcode flag showing whether the row is a Starcode canonical cluster.
   * Length deviation from the expected barcode length.
+  * Cluster columns showing exact count, collapsed count, how many variants were collapsed, and which exact barcodes were merged by Starcode.
 * Uses file-level threading when multiple bun-match CSVs are available.
 
 ### Step 3 — Ordered Barcode Sample Analysis
@@ -52,10 +54,10 @@ InsertDiversity scans Illumina FASTQ files to identify reads containing user-def
 
 ## Dependencies
 
-Core FASTA/FASTQ parsing uses Biopython. Ordered sample analysis also uses pandas, NumPy, and matplotlib.
+Core FASTA/FASTQ parsing uses Biopython. Ordered sample analysis also uses pandas, NumPy, and matplotlib. Barcode collapsing uses Starcode.
 
 ```bash
-conda install -c bioconda -c conda-forge biopython pandas numpy matplotlib
+conda install -c bioconda -c conda-forge biopython pandas numpy matplotlib starcode
 ```
 
 ---
@@ -129,10 +131,24 @@ It also writes a per-file summary CSV containing file-level metrics such as:
 * total reads in each input CSV
 * reads with extracted barcodes
 * total barcode observations
-* unique and real-unique barcode counts
+* exact unique, collapsed unique, and real-unique barcode counts
 * counts of barcodes unique to that file vs shared across files
-* min/max barcode abundance and mean count per unique barcode
+* min/max exact and collapsed barcode abundance and mean count per unique barcode
 * percent of reads with barcodes and percent unique/shared barcodes
+
+Important barcode extraction and collapsing settings include:
+
+* `expected_barcode_len`: expected length of a valid barcode. The barcode report includes `len_minus_expected`, which is used by ordered analysis when expected-length filtering is enabled.
+* `min_barcode_len`: minimum extracted barcode length to count when `include_empty_barcodes` is `false`.
+* `max_barcode_len`: maximum extracted barcode length to count. Barcodes longer than this are discarded before count reports and Starcode collapsing. The default is `100`.
+* `include_empty_barcodes`: if `true`, rows with an extracted barcode length value are counted even when the barcode string is empty. If `false`, only barcodes at least `min_barcode_len` bases long are counted.
+* `min_real_barcode_count`: legacy minimum-count rule used only when `collapse_barcodes` is `false`.
+* `collapse_barcodes`: enables abundance-aware barcode collapsing before the per-file barcode count report is written. When enabled, report rows represent Starcode canonical parent barcodes rather than every exact observed barcode string.
+* `starcode_path`: executable name or path for `starcode`. The script errors immediately if this cannot be found while collapsing is enabled.
+* `starcode_distance`: maximum Levenshtein edit distance passed to Starcode with `-d`. A value of `1` collapses one substitution, insertion, or deletion away; `2` allows up to two edits.
+* `starcode_cluster_ratio`: abundance ratio passed to Starcode with `-r` in message-passing mode. For example, `3` means a candidate variant with 5 reads can collapse into a parent only if the parent has more than 15 reads.
+* `starcode_clustering_algorithm`: one of `message_passing`, `spheres`, or `connected_components`.
+* `starcode_threads`: thread count passed to each Starcode process. The default is `1` because `barcode_from_bun_csv.py` already parallelizes across input files.
 
 ### 3. Compare barcodes across ordered samples
 
