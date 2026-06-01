@@ -18,13 +18,13 @@ Behavior:
     - Outputs all-barcode trajectories and a gain/loss-ratio heatmap.
 
 Run:
-    python ordered_barcode_sample_analysis.py config_ordered_barcode_analysis.json
+    python ordered_barcode_sample_analysis.py pipeline_config.json
 """
 
 from __future__ import annotations
 
 import argparse
-import json
+import concurrent.futures
 import math
 import re
 from pathlib import Path
@@ -34,10 +34,11 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 
+from config_helpers import available_threads, configured_threads, load_script_config
+
 
 def load_config(config_path: Path) -> dict:
-    with open(config_path, "r") as f:
-        cfg = json.load(f)
+    cfg = load_script_config(config_path, "ordered_barcode_sample_analysis")
 
     defaults = {
         "input_dir": ".",
@@ -214,9 +215,19 @@ def build_matrices(files: List[Path], cfg: dict):
     per_sample: Dict[str, pd.DataFrame] = {}
     summaries: List[dict] = []
 
-    for path in files:
-        sample, df, summary = read_one_csv(path, cfg)
+    max_workers = configured_threads(cfg, workload_size=len(files))
+    print(f"Using {max_workers} thread(s) for {len(files)} ordered-analysis CSV file(s) (available: {available_threads()}).")
 
+    with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+        future_to_index = {
+            executor.submit(read_one_csv, path, cfg): index
+            for index, path in enumerate(files)
+        }
+        ordered_results = [None] * len(files)
+        for future in concurrent.futures.as_completed(future_to_index):
+            ordered_results[future_to_index[future]] = future.result()
+
+    for sample, df, summary in ordered_results:
         if sample in per_sample:
             raise ValueError(f"Duplicate sample name after regex cleanup: {sample}")
 

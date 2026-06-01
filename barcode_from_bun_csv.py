@@ -17,10 +17,11 @@ In folder mode, also reports:
 import argparse
 import concurrent.futures
 import csv
-import json
 from collections import Counter, defaultdict
 from pathlib import Path
 from typing import Dict, Iterable, Optional
+
+from config_helpers import available_threads, configured_threads, load_script_config
 
 
 def safe_int(x: str) -> Optional[int]:
@@ -174,7 +175,7 @@ def main():
     cfg_path = Path(args.config)
     if not cfg_path.exists():
         raise FileNotFoundError(f"Config not found: {cfg_path}")
-    cfg = json.loads(cfg_path.read_text())
+    cfg = load_script_config(cfg_path, "barcode_from_bun_csv")
 
     expected_len = int(cfg.get("expected_barcode_len", 25))
     min_barcode_len = int(cfg.get("min_barcode_len", 1))
@@ -218,7 +219,8 @@ def main():
     per_file_unique_counts: Dict[str, int] = {}
     per_file_stats: Dict[str, dict] = {}
 
-    max_workers = int(cfg.get("max_workers", len(output_plan)))
+    max_workers = configured_threads(cfg, workload_size=len(output_plan))
+    print(f"Using {max_workers} thread(s) for {len(output_plan)} CSV file(s) (available: {available_threads()}).")
     with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
         future_to_item = {
             executor.submit(

@@ -1,5 +1,5 @@
 {
-  "description": "Consolidated InsertDiversity configuration. Set each script's enabled flag to true or false to choose which steps run with run_pipeline.py.",
+  "description": "Consolidated InsertDiversity configuration. This is the only config file: set global threads and each script enabled flag/config here.",
   "run_order": [
     "bun_extract",
     "barcode_from_bun_csv",
@@ -84,5 +84,6 @@
         "dpi": 300
       }
     }
-  }
+  },
+  "threads": "auto"
 }

@@ -18,13 +18,14 @@ import argparse
 import concurrent.futures
 import csv
 import gzip
-import json
 import re
 from collections import defaultdict
 from pathlib import Path
 from typing import Dict, Iterable, Optional, Tuple
 
 from Bio import SeqIO
+
+from config_helpers import available_threads, configured_threads, load_script_config
 
 
 READ_EXTENSIONS = (".fasta", ".fa", ".fna", ".fastq", ".fq")
@@ -291,7 +292,7 @@ def main():
     cfg_path = Path(args.config)
     if not cfg_path.exists():
         raise FileNotFoundError(f"Config not found: {cfg_path}")
-    cfg = json.loads(cfg_path.read_text())
+    cfg = load_script_config(cfg_path, "bun_extract")
 
     upstream = normalize_seq(cfg.get("upstream", ""))
     downstream = normalize_seq(cfg.get("downstream", ""))
@@ -331,7 +332,8 @@ def main():
 
     barcode_to_files = defaultdict(set)
 
-    max_workers = int(cfg.get("max_workers", len(primary_files)))
+    max_workers = configured_threads(cfg, workload_size=len(primary_files))
+    print(f"Using {max_workers} thread(s) for {len(primary_files)} primary input file(s) (available: {available_threads()}).")
     with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
         futures = [
             executor.submit(
