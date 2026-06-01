@@ -1,0 +1,88 @@
+{
+  "description": "Consolidated InsertDiversity configuration. Set each script's enabled flag to true or false to choose which steps run with run_pipeline.py.",
+  "run_order": [
+    "bun_extract",
+    "barcode_from_bun_csv",
+    "ordered_barcode_sample_analysis"
+  ],
+  "scripts": {
+    "bun_extract": {
+      "enabled": true,
+      "script": "bun_extract.py",
+      "config": {
+        "input_dir": "data/s17-bc",
+        "upstream": "TCATAGTGAGCTCAGCG",
+        "downstream": "GTGCCCCACAAGAGGTT",
+        "min_match": 10,
+        "out_dir": "outputs/bun_matches",
+        "cross_file_barcode_csv": "outputs/bun_matches/barcode_file_membership.csv",
+        "max_reads": null,
+        "progress_every": 200000
+      }
+    },
+    "barcode_from_bun_csv": {
+      "enabled": true,
+      "script": "barcode_from_bun_csv.py",
+      "config": {
+        "in_csv_dir": "outputs/bun_matches",
+        "in_csv_glob": "*_bun_matches.csv",
+        "out_csv_dir": "outputs/barcodes/augmented",
+        "out_barcode_report_dir": "outputs/barcodes/per_file_reports",
+        "out_multi_file_barcode_report": "outputs/barcodes/barcode_multi_file_membership.csv",
+        "out_file_summary_report": "outputs/barcodes/barcode_file_summary.csv",
+        "expected_barcode_len": 24,
+        "min_barcode_len": 1,
+        "include_empty_barcodes": true,
+        "min_real_barcode_count": 3
+      }
+    },
+    "ordered_barcode_sample_analysis": {
+      "enabled": true,
+      "script": "ordered_barcode_sample_analysis.py",
+      "config": {
+        "input_dir": "outputs/barcodes/per_file_reports",
+        "output_dir": "ordered_barcode_analysis_outputs",
+        "csv_pattern": "*.csv",
+        "explicit_files": [],
+        "sample_name_remove_regex": "_barcode_counts\\.csv$",
+        "barcode_column": "barcode",
+        "count_column": "count",
+        "existing_real_column": "is_real_barcode",
+        "len_minus_expected_column": "len_minus_expected",
+        "expected_len_column": "expected_barcode_len",
+        "barcode_len_column": "barcode_len",
+        "use_existing_real_column": false,
+        "require_expected_length": true,
+        "expected_barcode_length": 24,
+        "min_count_to_call_barcode_present": 3,
+        "min_samples_present_to_retain_barcode": 1,
+        "min_total_count_across_all_samples": 0,
+        "frequency_denominator": "all_barcodes",
+        "before_sample_indices": [],
+        "after_sample_indices": [],
+        "before_n_samples": 1,
+        "after_n_samples": 1,
+        "pseudocount_frequency": 1e-09,
+        "top_n_for_each_ranked_output": 500,
+        "top_n_to_plot": 50,
+        "max_barcodes_in_heatmap": 200,
+        "make_plots": true,
+        "make_heatmaps": true,
+        "make_first_vs_last_scatter": true,
+        "make_top_trajectory_plots": true,
+        "make_all_barcode_trajectory_plot": true,
+        "all_trajectory_min_count_in_any_sample": 3,
+        "all_trajectory_max_barcodes_to_plot": 5000,
+        "make_gain_loss_ratio_heatmap": true,
+        "gain_loss_heatmap_min_count_in_any_sample": 3,
+        "gain_loss_heatmap_max_barcodes": 200,
+        "gain_loss_heatmap_sort": "last_vs_first",
+        "gain_loss_heatmap_show_numbers": true,
+        "gain_loss_heatmap_number_decimals": 1,
+        "log_scale_y_axis": true,
+        "pseudocount_for_log_plots": 1e-09,
+        "dpi": 300
+      }
+    }
+  }
+}

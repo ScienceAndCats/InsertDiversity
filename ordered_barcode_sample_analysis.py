@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-ordered_barcode_sample_analysis_3.py
+ordered_barcode_sample_analysis.py
 
 Analyze barcode count CSVs across an ordered set of samples/treatments/timepoints.
 
@@ -18,7 +18,7 @@ Behavior:
     - Outputs all-barcode trajectories and a gain/loss-ratio heatmap.
 
 Run:
-    python ordered_barcode_sample_analysis_3.py config_ordered_barcode_analysis_3.json
+    python ordered_barcode_sample_analysis.py config_ordered_barcode_analysis.json
 """
 
 from __future__ import annotations
