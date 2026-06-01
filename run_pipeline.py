@@ -7,7 +7,6 @@ import argparse
 import json
 import subprocess
 import sys
-import tempfile
 from pathlib import Path
 from typing import Any, Dict, List
 
@@ -41,15 +40,6 @@ def selected_script_names(cfg: Dict[str, Any]) -> List[str]:
         raise ValueError("run_order includes scripts not present in scripts: " + ", ".join(missing))
 
     return [name for name in run_order if scripts[name].get("enabled", False)]
-
-
-def write_step_config(temp_dir: Path, name: str, step: Dict[str, Any]) -> Path:
-    if "config" not in step or not isinstance(step["config"], dict):
-        raise ValueError(f"Script '{name}' must contain a config object.")
-
-    config_path = temp_dir / f"{name}.json"
-    config_path.write_text(json.dumps(step["config"], indent=2) + "\n")
-    return config_path
 
 
 def command_for(name: str, step: Dict[str, Any], config_path: Path) -> List[str]:
@@ -96,26 +86,22 @@ def main() -> None:
         return
 
     repo_root = Path(__file__).resolve().parent
+    planned_commands = []
 
-    with tempfile.TemporaryDirectory(prefix="insertdiversity_pipeline_") as temp_name:
-        temp_dir = Path(temp_name)
-        planned_commands = []
+    for name in enabled_names:
+        step = cfg["scripts"][name]
+        planned_commands.append((name, command_for(name, step, pipeline_config_path)))
 
-        for name in enabled_names:
-            step = cfg["scripts"][name]
-            step_config_path = write_step_config(temp_dir, name, step)
-            planned_commands.append((name, command_for(name, step, step_config_path)))
-
-        if args.dry_run:
-            print("Enabled pipeline steps:")
-            for name, command in planned_commands:
-                print(f"  {name}: {' '.join(command)}")
-            return
-
+    if args.dry_run:
+        print("Enabled pipeline steps:")
         for name, command in planned_commands:
-            print(f"\n=== Running {name} ===")
-            print("Command:", " ".join(command))
-            subprocess.run(command, cwd=repo_root, check=True)
+            print(f"  {name}: {' '.join(command)}")
+        return
+
+    for name, command in planned_commands:
+        print(f"\n=== Running {name} ===")
+        print("Command:", " ".join(command))
+        subprocess.run(command, cwd=repo_root, check=True)
 
     print("\nPipeline complete.")
 
