@@ -302,7 +302,7 @@ def process_one_input_file(
 
 def main():
     ap = argparse.ArgumentParser(description="Extract flanking sequence relative to bun matches across one file or a folder.")
-    ap.add_argument("--config", required=True, help="Path to JSON config file")
+    ap.add_argument("--config", required=True, help="Path to YAML config file")
     args = ap.parse_args()
 
     cfg_path = Path(args.config)

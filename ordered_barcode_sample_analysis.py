@@ -18,7 +18,7 @@ Behavior:
     - Outputs all-barcode trajectories and a gain/loss-ratio heatmap.
 
 Run:
-    python ordered_barcode_sample_analysis.py pipeline_config.json
+    python ordered_barcode_sample_analysis.py pipeline_config.yaml
 """
 
 from __future__ import annotations
@@ -32,6 +32,7 @@ from pathlib import Path
 from typing import Dict, List, Tuple
 
 from config_helpers import available_threads, configured_threads, load_script_config, run_cli
+from bun_extract import READ_EXTENSIONS, strip_seq_extensions
 
 
 plt = None
@@ -73,7 +74,7 @@ def load_config(config_path: Path) -> dict:
         "len_minus_expected_column": "len_minus_expected",
         "expected_len_column": "expected_barcode_len",
         "barcode_len_column": "barcode_len",
-        "use_existing_real_column": False,
+        "use_existing_real_column": True,
         "require_expected_length": True,
         "expected_barcode_length": 25,
         "min_count_to_call_barcode_present": 3,
@@ -86,12 +87,16 @@ def load_config(config_path: Path) -> dict:
         "after_n_samples": 1,
         "pseudocount_frequency": 1e-9,
         "top_n_for_each_ranked_output": 500,
+    }
+    plot_defaults = {
         "top_n_to_plot": 50,
         "max_barcodes_in_heatmap": 200,
         "make_plots": True,
         "make_heatmaps": True,
         "make_first_vs_last_scatter": True,
         "make_top_trajectory_plots": True,
+        "make_interactive_trajectory_plots": False,
+        "real_barcode_sample": "first",
         "make_all_barcode_trajectory_plot": True,
         "all_trajectory_min_count_in_any_sample": 3,
         "all_trajectory_max_barcodes_to_plot": 5000,
@@ -106,8 +111,22 @@ def load_config(config_path: Path) -> dict:
         "dpi": 300,
     }
 
+    plots = cfg.pop("plots", {})
+    if not isinstance(plots, dict):
+        raise ValueError("plots must be a YAML mapping")
+    unknown = set(plots) - set(plot_defaults)
+    if unknown:
+        raise ValueError("Unknown plots settings: " + ", ".join(sorted(unknown)))
+    cfg.update(plots)
+    defaults.update(plot_defaults)
+
     for k, v in defaults.items():
         cfg.setdefault(k, v)
+
+    if cfg["real_barcode_sample"] != "first":
+        raise ValueError("plots.real_barcode_sample must be 'first'; all plots use real barcodes in the first sample")
+    if int(cfg["min_samples_present_to_retain_barcode"]) < 1:
+        raise ValueError("min_samples_present_to_retain_barcode must be at least 1")
 
     if cfg["frequency_denominator"] not in {"all_barcodes", "retained_barcodes"}:
         raise ValueError("frequency_denominator must be 'all_barcodes' or 'retained_barcodes'")
@@ -123,6 +142,8 @@ def load_config(config_path: Path) -> dict:
 def parse_bool_series(s: pd.Series) -> pd.Series:
     if pd.api.types.is_bool_dtype(s):
         return s.fillna(False)
+    if pd.api.types.is_numeric_dtype(s):
+        return s.fillna(0).eq(1)
 
     return s.astype(str).str.strip().str.lower().isin(
         ["true", "t", "1", "yes", "y"]
@@ -137,15 +158,26 @@ def sample_name_from_file(path: Path, remove_regex: str) -> str:
 
 
 def discover_files(cfg: dict) -> List[Path]:
+    input_dir = Path(cfg["input_dir"]).expanduser().resolve()
+    if not input_dir.is_dir():
+        raise FileNotFoundError(f"input_dir not found or not a directory: {input_dir}")
     if cfg.get("explicit_files"):
-        files = [Path(p).expanduser().resolve() for p in cfg["explicit_files"]]
+        # Match the same extension stripping used by bun_extract, preserving order.
+        # Original reads need not still be available when reanalyzing reports.
+        files = []
+        for name in cfg["explicit_files"]:
+            source_name = Path(name).name
+            sequence_name = source_name[:-3] if source_name.lower().endswith(".gz") else source_name
+            stem = strip_seq_extensions(source_name)
+            if not sequence_name.lower().endswith(READ_EXTENSIONS):
+                raise ValueError(f"explicit_files entries must be original FASTA/FASTQ filenames: {name}")
+            files.append(input_dir / f"{stem}_barcode_counts.csv")
+        if len(files) != len(set(files)):
+            raise ValueError("explicit_files contains duplicate samples after stripping sequence extensions")
         missing = [str(p) for p in files if not p.is_file()]
         if missing:
-            raise FileNotFoundError("These input CSV files do not exist:\n" + "\n".join(missing))
+            raise FileNotFoundError("Barcode reports for explicit_files do not exist:\n" + "\n".join(missing))
     else:
-        input_dir = Path(cfg["input_dir"]).expanduser().resolve()
-        if not input_dir.is_dir():
-            raise FileNotFoundError(f"input_dir not found or not a directory: {input_dir}")
         files = sorted(p for p in input_dir.glob(cfg["csv_pattern"]) if p.is_file())
 
     if len(files) < 2:
@@ -154,7 +186,7 @@ def discover_files(cfg: dict) -> List[Path]:
     return files
 
 
-def read_one_csv(path: Path, cfg: dict) -> Tuple[str, pd.DataFrame, dict]:
+def read_one_csv(path: Path, cfg: dict, first_sample: bool = False) -> Tuple[str, pd.DataFrame, dict]:
     barcode_col = cfg["barcode_column"]
     count_col = cfg["count_column"]
 
@@ -171,9 +203,21 @@ def read_one_csv(path: Path, cfg: dict) -> Tuple[str, pd.DataFrame, dict]:
 
     grouped = df.groupby(barcode_col, as_index=False)[count_col].sum()
 
-    meta_cols = [c for c in df.columns if c != count_col]
+    real_col = cfg["existing_real_column"]
+    need_real = cfg["use_existing_real_column"] or (first_sample and cfg.get("make_plots", True))
+    if need_real and real_col not in df.columns:
+        raise ValueError(f"{path.name}: missing real barcode column '{real_col}' (required for real-barcode analysis/plots)")
+    if real_col in df.columns:
+        df[real_col] = parse_bool_series(df[real_col])
+        # Duplicate rows describe one barcode: at least one real observation qualifies.
+        real_flags = df.groupby(barcode_col)[real_col].any()
+    else:
+        real_flags = pd.Series(False, index=grouped[barcode_col])
+
+    meta_cols = [c for c in df.columns if c not in (count_col, real_col)]
     meta = df[meta_cols].drop_duplicates(subset=[barcode_col], keep="first")
     df = grouped.merge(meta, on=barcode_col, how="left")
+    df["is_real_in_source"] = df[barcode_col].map(real_flags).fillna(False).astype(bool)
 
     sample_name = sample_name_from_file(path, cfg["sample_name_remove_regex"])
 
@@ -207,10 +251,7 @@ def read_one_csv(path: Path, cfg: dict) -> Tuple[str, pd.DataFrame, dict]:
         usable &= length_ok
 
     if cfg["use_existing_real_column"]:
-        real_col = cfg["existing_real_column"]
-        if real_col not in df.columns:
-            raise ValueError(f"{path.name}: missing real barcode column '{real_col}'")
-        usable &= parse_bool_series(df[real_col])
+        usable &= df["is_real_in_source"]
 
     df["passes_per_sample_filter"] = usable
 
@@ -218,6 +259,7 @@ def read_one_csv(path: Path, cfg: dict) -> Tuple[str, pd.DataFrame, dict]:
         "sample": sample_name,
         "file": str(path),
         "total_raw_reads": int(df[count_col].sum()),
+        "unique_real_barcodes": int(df["is_real_in_source"].sum()),
         "unique_barcodes_raw_count_gt_0": int((df[count_col] > 0).sum()),
         "unique_barcodes_count_ge_present_cutoff": int(count_present.sum()),
         "unique_barcodes_passing_per_sample_filter": int(usable.sum()),
@@ -226,7 +268,7 @@ def read_one_csv(path: Path, cfg: dict) -> Tuple[str, pd.DataFrame, dict]:
         ),
     }
 
-    return sample_name, df[[barcode_col, count_col, "passes_per_sample_filter"]], summary
+    return sample_name, df[[barcode_col, count_col, "passes_per_sample_filter", "is_real_in_source"]], summary
 
 
 def build_matrices(files: List[Path], cfg: dict):
@@ -242,7 +284,7 @@ def build_matrices(files: List[Path], cfg: dict):
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
         future_to_index = {
-            executor.submit(read_one_csv, path, cfg): index
+            executor.submit(read_one_csv, path, cfg, index == 0): index
             for index, path in enumerate(files)
         }
         ordered_results = [None] * len(files)
@@ -278,6 +320,10 @@ def build_matrices(files: List[Path], cfg: dict):
         (n_present >= int(cfg["min_samples_present_to_retain_barcode"]))
         & (total_count >= int(cfg["min_total_count_across_all_samples"]))
     )
+    first_real = (
+        per_sample[sample_order[0]].set_index(barcode_col)["is_real_in_source"]
+        .reindex(all_barcodes).fillna(False).astype(bool)
+    )
 
     barcode_filter_summary = pd.DataFrame(
         {
@@ -285,6 +331,8 @@ def build_matrices(files: List[Path], cfg: dict):
             "total_count_across_all_samples": total_count.values,
             "n_samples_present_after_filter": n_present.values,
             "kept_for_analysis": keep.values,
+            "is_real_in_first_sample": first_real.values,
+            "eligible_for_plots": (keep & first_real).values,
         }
     ).sort_values(
         [
@@ -410,7 +458,18 @@ def compute_stats(
             }
         )
 
-    return pd.DataFrame(rows)
+    # Keep the output schema even if no barcodes pass the analysis filters.
+    return pd.DataFrame(rows, columns=[
+        "barcode", "first_sample", "last_sample", "first_count", "last_count",
+        "first_frequency", "last_frequency", "frequency_difference_first_to_last",
+        "log2_fold_change_first_to_last", "abs_log2_fold_change_first_to_last",
+        "max_frequency_any_sample", "sample_at_max_frequency", "max_count_any_sample",
+        "sample_at_max_count", "max_frequency_before", "sample_at_max_frequency_before",
+        "max_frequency_after", "sample_at_max_frequency_after", "mean_frequency",
+        "median_frequency", "total_count_across_samples", "n_samples_present",
+        "n_samples_observed_count_gt_0", "present_in_all_samples",
+        "absent_or_below_cutoff_in_at_least_one_sample", "variable_presence_absence",
+    ])
 
 
 def save_matrix_subset(
@@ -436,6 +495,8 @@ def save_trajectory_plot(
     cfg: dict,
 ):
     if not barcodes:
+        outpath.unlink(missing_ok=True)
+        outpath.with_suffix(".html").unlink(missing_ok=True)
         return
 
     samples = list(freqs.columns)
@@ -466,6 +527,13 @@ def save_trajectory_plot(
     fig.savefig(outpath, dpi=int(cfg["dpi"]))
     plt.close(fig)
 
+    if cfg.get("make_interactive_trajectory_plots", False):
+        from interactive_trajectories import save_interactive_trajectory_plot
+
+        save_interactive_trajectory_plot(barcodes, freqs, outpath.with_suffix(".html"), title, cfg)
+    else:
+        outpath.with_suffix(".html").unlink(missing_ok=True)
+
 
 def save_frequency_heatmap(
     barcodes: List[str],
@@ -475,6 +543,7 @@ def save_frequency_heatmap(
     cfg: dict,
 ):
     if not barcodes:
+        outpath.unlink(missing_ok=True)
         return
 
     barcodes = barcodes[: int(cfg["max_barcodes_in_heatmap"])]
@@ -511,6 +580,7 @@ def save_ranked_output(
     counts: pd.DataFrame,
     freqs: pd.DataFrame,
     cfg: dict,
+    plot_stats: pd.DataFrame,
 ):
     outdir = output_dir / folder_name
     plotdir = outdir / "plots"
@@ -530,10 +600,15 @@ def save_ranked_output(
 
     save_matrix_subset(outdir, barcodes, counts, freqs, folder_name)
 
+    # Filter before ranking/limiting so later-only real barcodes cannot crowd out
+    # first-sample real barcodes in any plot.
+    plot_ranked = plot_stats.sort_values(sort_col, ascending=ascending).head(top_n)
+    plot_barcodes = list(plot_ranked["barcode"])
+    plot_ranked.to_csv(plotdir / f"{folder_name}_plot_eligible_barcodes.csv", index=False)
+
     if cfg.get("make_plots", True) and cfg.get("make_top_trajectory_plots", True):
-        plot_barcodes = barcodes[: int(cfg["top_n_to_plot"])]
         save_trajectory_plot(
-            plot_barcodes,
+            plot_barcodes[: int(cfg["top_n_to_plot"])],
             freqs,
             plotdir / f"{folder_name}_top_trajectories.png",
             f"Top trajectories: {folder_name}",
@@ -542,7 +617,7 @@ def save_ranked_output(
 
     if cfg.get("make_plots", True) and cfg.get("make_heatmaps", True):
         save_frequency_heatmap(
-            barcodes,
+            plot_barcodes,
             freqs,
             plotdir / f"{folder_name}_frequency_heatmap.png",
             f"Frequency heatmap: {folder_name}",
@@ -627,6 +702,9 @@ def save_gain_loss_ratio_heatmap(
     selected.to_csv(plotdir / "gain_loss_ratio_heatmap_barcodes.csv", index=False)
 
     if not barcodes:
+        for filename in ("gain_loss_ratio_heatmap.png", "gain_loss_raw_ratio_matrix.csv",
+                         "gain_loss_log2_ratio_matrix.csv", "gain_loss_heatmap_count_matrix.csv"):
+            (plotdir / filename).unlink(missing_ok=True)
         return
 
     sub_freq = freqs.loc[barcodes]
@@ -685,6 +763,8 @@ def save_gain_loss_ratio_heatmap(
 
 def save_first_vs_last_scatter(stats: pd.DataFrame, output_dir: Path, cfg: dict):
     if stats.empty:
+        for filename in ("first_vs_last_frequency_scatter.png", "log2fc_first_to_last_vs_max_frequency.png"):
+            (output_dir / "plots" / filename).unlink(missing_ok=True)
         return
 
     plotdir = output_dir / "plots"
@@ -769,6 +849,12 @@ def write_summary(
         )
         f.write("  - Missing barcode rows are treated as 0 reads in that sample.\n")
         f.write(f"  - Frequency denominator: {cfg['frequency_denominator']}\n\n")
+        f.write(f"  - use_existing_real_column: {cfg['use_existing_real_column']}\n")
+        f.write("  - When enabled, only real barcodes passing the per-sample count/length filters call presence.\n")
+        f.write("  - Counts for retained barcodes are preserved in all samples, even when not called present.\n")
+        f.write(f"  - ALL plots require {cfg['existing_real_column']}=true in the FIRST sample ({sample_order[0]}).\n")
+        f.write("  - Real status in other samples does not restrict plots; frequencies keep the configured denominator.\n")
+        f.write(f"  - Interactive trajectory HTML: {cfg['make_interactive_trajectory_plots']}\n\n")
 
         f.write("Main outputs:\n")
         f.write("  - all_barcode_ordered_sample_stats.csv\n")
@@ -833,7 +919,7 @@ def main():
     parser = argparse.ArgumentParser(
         description="Analyze barcode counts across ordered samples or treatments."
     )
-    parser.add_argument("config", help="Path to config JSON file")
+    parser.add_argument("config", help="Path to config YAML file")
     args = parser.parse_args()
 
     cfg = load_config(Path(args.config))
@@ -856,6 +942,10 @@ def main():
     after_samples = get_group_samples(sample_order, cfg, "after")
 
     stats = compute_stats(sample_order, counts, freqs, present, cfg)
+    plot_barcodes = set(barcode_filter_summary.loc[barcode_filter_summary["eligible_for_plots"], "barcode"])
+    plot_stats = stats.loc[stats["barcode"].isin(plot_barcodes)].copy()
+    plot_stats.to_csv(output_dir / "plot_eligible_barcode_stats.csv", index=False)
+    print(f"Real barcodes in first sample ({sample_order[0]}) eligible for plots: {len(plot_stats)}.")
 
     counts.to_csv(output_dir / "retained_counts_matrix.csv")
     freqs.to_csv(output_dir / "retained_frequency_matrix.csv")
@@ -864,7 +954,7 @@ def main():
     sample_summary.to_csv(output_dir / "sample_barcode_counts_summary.csv", index=False)
     stats.to_csv(output_dir / "all_barcode_ordered_sample_stats.csv", index=False)
 
-    variable = stats[stats["variable_presence_absence"]].copy()
+    variable = stats.loc[stats["variable_presence_absence"].astype(bool)].copy()
     variable = variable.sort_values(
         ["n_samples_present", "max_count_any_sample"],
         ascending=[True, False],
@@ -883,6 +973,7 @@ def main():
         counts,
         freqs,
         cfg,
+        plot_stats,
     )
 
     save_ranked_output(
@@ -894,6 +985,7 @@ def main():
         counts,
         freqs,
         cfg,
+        plot_stats,
     )
 
     save_ranked_output(
@@ -905,6 +997,7 @@ def main():
         counts,
         freqs,
         cfg,
+        plot_stats,
     )
 
     save_ranked_output(
@@ -916,16 +1009,17 @@ def main():
         counts,
         freqs,
         cfg,
+        plot_stats,
     )
 
     if cfg.get("make_plots", True) and cfg.get("make_first_vs_last_scatter", True):
-        save_first_vs_last_scatter(stats, output_dir, cfg)
+        save_first_vs_last_scatter(plot_stats, output_dir, cfg)
 
     if cfg.get("make_plots", True) and cfg.get("make_all_barcode_trajectory_plot", True):
-        save_all_barcode_trajectory_plot(stats, freqs, counts, output_dir, cfg)
+        save_all_barcode_trajectory_plot(plot_stats, freqs, counts, output_dir, cfg)
 
     if cfg.get("make_plots", True) and cfg.get("make_gain_loss_ratio_heatmap", True):
-        save_gain_loss_ratio_heatmap(stats, freqs, counts, output_dir, cfg)
+        save_gain_loss_ratio_heatmap(plot_stats, freqs, counts, output_dir, cfg)
 
     write_summary(
         output_dir / "analysis_summary.txt",
