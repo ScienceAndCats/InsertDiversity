@@ -77,8 +77,10 @@ scripts:
         # This plot rule applies even when use_existing_real_column is false.
         # The first report must have existing_real_column; no real flags are inferred.
         real_barcode_sample: first
-        # Write offline HTML alongside each trajectory PNG. Uncheck samples to gray
-        # out their points/segments; this changes only the display, not the analysis.
+        # Write offline HTML alongside each trajectory PNG. Select samples and barcodes
+        # independently: unchecked samples gray out points/segments; unchecked barcodes
+        # gray out entire trajectories. Search barcodes by sequence. Display changes
+        # do not affect the analysis or the first-sample REAL-barcode requirement.
         make_interactive_trajectory_plots: true
         top_n_to_plot: 50
         max_barcodes_in_heatmap: 200
