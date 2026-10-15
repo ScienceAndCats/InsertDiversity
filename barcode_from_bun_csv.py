@@ -430,7 +430,7 @@ def process_one_csv(
 
 def main():
     ap = argparse.ArgumentParser(description="Extract barcode(s) from bun-match CSV(s) and summarize counts.")
-    ap.add_argument("--config", required=True, help="Path to JSON config file")
+    ap.add_argument("--config", required=True, help="Path to YAML config file")
     args = ap.parse_args()
 
     cfg_path = Path(args.config)

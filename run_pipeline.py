@@ -1,16 +1,15 @@
 #!/usr/bin/env python3
-"""Run InsertDiversity scripts from one consolidated JSON config."""
+"""Run InsertDiversity scripts from one consolidated YAML config."""
 
 from __future__ import annotations
 
 import argparse
-import json
 import subprocess
 import sys
 from pathlib import Path
 from typing import Any, Dict, List
 
-from config_helpers import run_cli
+from config_helpers import load_config_file, run_cli
 
 
 COMMANDS = {
@@ -27,8 +26,7 @@ def load_pipeline_config(path: Path) -> Dict[str, Any]:
     if not path.is_file():
         raise FileNotFoundError(f"Pipeline config not found: {path}")
 
-    with path.open("r") as handle:
-        cfg = json.load(handle)
+    cfg = load_config_file(path)
 
     if "scripts" not in cfg or not isinstance(cfg["scripts"], dict):
         raise ValueError("Pipeline config must contain a 'scripts' object.")
@@ -73,12 +71,12 @@ def command_for(name: str, step: Dict[str, Any], config_path: Path) -> List[str]
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Run enabled InsertDiversity analysis steps from a consolidated JSON config."
+        description="Run enabled InsertDiversity analysis steps from a consolidated YAML config."
     )
     parser.add_argument(
         "--config",
-        default="pipeline_config.json",
-        help="Path to consolidated pipeline JSON config (default: pipeline_config.json).",
+        default="pipeline_config.yaml",
+        help="Path to consolidated pipeline YAML config (default: pipeline_config.yaml).",
     )
     parser.add_argument(
         "--dry-run",

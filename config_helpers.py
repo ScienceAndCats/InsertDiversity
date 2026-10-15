@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 import os
 import sys
 from pathlib import Path
@@ -43,15 +42,25 @@ def configured_threads(cfg: Dict[str, Any], workload_size: Optional[int] = None)
     return resolve_thread_count(value, workload_size=workload_size)
 
 
+def load_config_file(config_path: Path) -> Dict[str, Any]:
+    """Read a YAML mapping safely (legacy JSON mappings are also valid YAML)."""
+    import yaml
+
+    with config_path.open("r") as handle:
+        cfg = yaml.safe_load(handle)
+    if not isinstance(cfg, dict):
+        raise ValueError(f"{config_path}: config must be a YAML mapping")
+    return cfg
+
+
 def load_script_config(config_path: Path, script_name: str) -> Dict[str, Any]:
-    """Load either a script-specific config or one step from pipeline_config.json.
+    """Load either a script-specific config or one step from pipeline_config.yaml.
 
     A consolidated config is detected by the presence of a top-level 'scripts'
     object. The named script's nested 'config' block is returned, with top-level
     shared keys such as 'threads' inherited unless the step overrides them.
     """
-    with config_path.open("r") as handle:
-        cfg = json.load(handle)
+    cfg = load_config_file(config_path)
 
     scripts = cfg.get("scripts")
     if not isinstance(scripts, dict):

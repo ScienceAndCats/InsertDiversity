@@ -1,0 +1,3 @@
+-r requirements.txt
+# Optional interactive-plot regression tests also require system Chromium.
+playwright>=1.40

@@ -54,11 +54,14 @@ InsertDiversity scans Illumina FASTQ files to identify reads containing user-def
 
 ## Dependencies
 
-Core FASTA/FASTQ parsing uses Biopython. Ordered sample analysis also uses pandas, NumPy, and matplotlib. Barcode collapsing uses Starcode.
+Core FASTA/FASTQ parsing uses Biopython. Ordered sample analysis also uses pandas, NumPy, and matplotlib. YAML configuration uses PyYAML; interactive trajectories use Plotly. Barcode collapsing uses Starcode.
 
 ```bash
-conda install -c bioconda -c conda-forge biopython pandas numpy matplotlib starcode
+conda install -c bioconda -c conda-forge biopython pandas numpy matplotlib pyyaml plotly starcode
 ```
+
+Alternatively, install Python dependencies with `python -m pip install -r requirements.txt`
+and install Starcode separately on your `PATH`.
 
 ---
 
@@ -66,45 +69,47 @@ conda install -c bioconda -c conda-forge biopython pandas numpy matplotlib starc
 
 InsertDiversity now uses **one consolidated config file**:
 
-* `pipeline_config.json` controls every script.
+* `pipeline_config.yaml` controls every script.
+* YAML comments document sample ordering and the plot eligibility rule. Legacy JSON
+  configs can still be read, but the default config and examples use YAML.
 * `run_order` controls the order used by `run_pipeline.py`.
 * Each entry under `scripts` has an `enabled` flag. Set that flag to `true` to run the step or `false` to skip it.
 * Each entry under `scripts` has a `config` object containing that step's settings.
 * Top-level `threads` controls threading for all steps. The default value is `"auto"`, which uses every hardware thread reported by the system. Set it to a positive integer to limit thread usage globally.
-* If needed, a specific step can override the global thread count by adding `"threads": <number>` inside that step's `config` object.
+* If needed, a specific step can override the global thread count by adding `threads: <number>` inside that step's `config` object.
 
 Example toggle and thread limit:
 
-```json
-{
-  "threads": 8,
-  "scripts": {
-    "bun_extract": { "enabled": true },
-    "barcode_from_bun_csv": { "enabled": true },
-    "ordered_barcode_sample_analysis": { "enabled": false }
-  }
-}
+```yaml
+threads: 8
+scripts:
+  bun_extract:
+    enabled: true
+  barcode_from_bun_csv:
+    enabled: true
+  ordered_barcode_sample_analysis:
+    enabled: false
 ```
 
-The example above is abbreviated; keep the full `config` objects in `pipeline_config.json`.
+The example above is abbreviated; keep the full `config` objects in `pipeline_config.yaml`.
 
 ---
 
 ## Running the Full or Partial Pipeline
 
-Edit `pipeline_config.json`, then run:
+Edit `pipeline_config.yaml`, then run:
 
 ```bash
-python run_pipeline.py --config pipeline_config.json
+python run_pipeline.py --config pipeline_config.yaml
 ```
 
 To check which enabled commands would run without executing them:
 
 ```bash
-python run_pipeline.py --config pipeline_config.json --dry-run
+python run_pipeline.py --config pipeline_config.yaml --dry-run
 ```
 
-`run_pipeline.py` passes the same consolidated config file to each enabled script. Each script reads its own block from `pipeline_config.json`, so no temporary or per-script config files are required.
+`run_pipeline.py` passes the same consolidated config file to each enabled script. Each script reads its own block from `pipeline_config.yaml`, so no temporary or per-script config files are required.
 
 ---
 
@@ -115,16 +120,16 @@ You can still run any script directly, but use the same consolidated config file
 ### 1. Detect buns/flanking matches
 
 ```bash
-python bun_extract.py --config pipeline_config.json
+python bun_extract.py --config pipeline_config.yaml
 ```
 
 ### 2. Extract and summarize barcodes
 
 ```bash
-python barcode_from_bun_csv.py --config pipeline_config.json
+python barcode_from_bun_csv.py --config pipeline_config.yaml
 ```
 
-This writes per-file augmented CSVs, per-file barcode count reports, and a multi-file barcode membership CSV under the locations configured in `pipeline_config.json`.
+This writes per-file augmented CSVs, per-file barcode count reports, and a multi-file barcode membership CSV under the locations configured in `pipeline_config.yaml`.
 
 It also writes a per-file summary CSV containing file-level metrics such as:
 
@@ -153,16 +158,55 @@ Important barcode extraction and collapsing settings include:
 ### 3. Compare barcodes across ordered samples
 
 ```bash
-python ordered_barcode_sample_analysis.py pipeline_config.json
+python ordered_barcode_sample_analysis.py pipeline_config.yaml
 ```
 
 Important ordered-analysis settings include:
 
+* `explicit_files`: original FASTA/FASTQ filenames in the desired sample order, for
+  example `[baseline.fasta, treatment.fastq.gz]`. These resolve to
+  `baseline_barcode_counts.csv` and `treatment_barcode_counts.csv` in `input_dir`.
+  Paths to original reads are also accepted using their filenames; the original
+  read files need not still exist. CSV filenames and duplicate sample stems are
+  rejected. Leave `[]` to use alphabetical report order.
+* `use_existing_real_column`: when `true`, a barcode must have a true
+  `existing_real_column` flag as well as passing count/length checks to be called
+  present in a sample. Retention uses those presence calls. Counts in other samples
+  are preserved for retained barcodes, even if their real flags are false there.
 * `min_count_to_call_barcode_present`: minimum count needed to call a barcode present in a sample.
 * `min_samples_present_to_retain_barcode`: number of samples in which a barcode must pass the per-sample filter to be retained.
 * `require_expected_length`: whether to require barcode length to match `expected_barcode_length`.
 * `frequency_denominator`: whether frequencies use all barcodes or only retained barcodes.
 * `before_sample_indices` / `after_sample_indices`: optional explicit sample groups for before-vs-after comparisons.
+
+All plot settings live in `scripts.ordered_barcode_sample_analysis.config.plots`.
+**Every plot uses only retained barcodes marked REAL in the first ordered sample.**
+Real status in later samples does not restrict plots. This rule also applies when
+`use_existing_real_column` is `false`; the first report must contain the real flag
+column. Plot filtering happens before ranking and plot limits, and keeps the
+configured frequency denominator. Analysis tables may include barcodes that are
+real only in later samples. `barcode_filter_summary.csv` records
+`is_real_in_first_sample` and `eligible_for_plots`, and
+`plot_eligible_barcode_stats.csv` lists the set eligible for every plot.
+
+```yaml
+plots:
+  # ALL plots require REAL only in the FIRST sample; later real flags do not matter.
+  real_barcode_sample: first
+  make_interactive_trajectory_plots: true
+```
+
+With `make_interactive_trajectory_plots: true`, each all-barcode or ranked
+trajectory PNG also has an HTML file beside it. Open that file in a browser;
+Plotly is embedded, so no server or network access is needed. Uncheck a sample to
+gray out its points and adjacent trajectory segments; recheck it to restore its
+colors. “Select all” and “Gray out all” control every sample. These controls do not
+remove samples, recalculate frequencies, or change which barcodes qualify. PNG
+exports remain static. Existing flat plot settings are still accepted by the loader.
+
+Run regression tests with `python -m unittest discover -s tests -v`. Browser tests
+also require `python -m pip install -r requirements-dev.txt` and system Chromium
+(`chromium` on `PATH`); they are explicitly skipped if those tools are absent.
 
 ---
 
@@ -174,4 +218,4 @@ The scripts parallelize across independent input files, which is the safest conc
 * `barcode_from_bun_csv.py` processes bun-match CSV files concurrently.
 * `ordered_barcode_sample_analysis.py` reads and preprocesses barcode count CSV files concurrently before building ordered matrices.
 
-By default, `threads` is `"auto"`, so the scripts use the maximum hardware threads available to the process. To limit CPU usage, set top-level `threads` in `pipeline_config.json` to a positive integer.
+By default, `threads` is `"auto"`, so the scripts use the maximum hardware threads available to the process. To limit CPU usage, set top-level `threads` in `pipeline_config.yaml` to a positive integer.
