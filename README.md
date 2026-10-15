@@ -200,7 +200,11 @@ With `make_interactive_trajectory_plots: true`, each all-barcode or ranked
 trajectory PNG also has an HTML file beside it. Open that file in a browser;
 Plotly is embedded, so no server or network access is needed. Uncheck a sample to
 gray out its points and adjacent trajectory segments; recheck it to restore its
-colors. “Select all” and “Gray out all” control every sample. These controls do not
+colors. A separate, searchable barcode list lets you uncheck individual barcodes
+to gray out their entire trajectories. Both selections apply together: reselecting
+a barcode preserves any grayed-out samples. Each section has its own “Select all”
+and “Gray out all” buttons; barcode buttons affect all barcodes even when search
+filters the list. Searching does not change selections. These controls do not
 remove samples, recalculate frequencies, or change which barcodes qualify. PNG
 exports remain static. Existing flat plot settings are still accepted by the loader.
 
